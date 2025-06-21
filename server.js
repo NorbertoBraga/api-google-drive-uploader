@@ -23,6 +23,52 @@ app.use((req, res, next) => {
   next();
 });
 
+// =================================================================
+// FUNÇÃO DE VALIDAÇÃO DE SEGURANÇA PARA CAMINHOS DE ARQUIVO
+// =================================================================
+function validateFilePath(filePath) {
+  // 1. Verifica se o caminho é uma string válida
+  if (!filePath || typeof filePath !== 'string') {
+    throw new Error('Caminho do arquivo é obrigatório e deve ser uma string');
+  }
+  
+  // 2. Normaliza o caminho e remove tentativas de directory traversal
+  const normalizedPath = path.normalize(filePath).replace(/^(\.\.(\/|\\|$))+/, '');
+  
+  // 3. Define diretórios permitidos (ajuste conforme sua necessidade)
+  const allowedDirectories = [
+    '/app/uploads',   // Pasta padrão de uploads
+    '/app/temp',      // Pasta para arquivos temporários
+    '/tmp'            // Pasta temporária do sistema
+  ];
+  
+  // 4. Verifica se o caminho está dentro dos diretórios permitidos
+  const isPathAllowed = allowedDirectories.some(allowedDir => 
+    normalizedPath.startsWith(allowedDir)
+  );
+  
+  if (!isPathAllowed) {
+    throw new Error('Caminho de arquivo não permitido por questões de segurança');
+  }
+  
+  // 5. Verifica caracteres perigosos
+  const dangerousPatterns = [
+    /\.\./,       // Tentativas de subir diretórios
+    /[<>:"|?*]/,  // Caracteres especiais perigosos
+    /\0/,          // Caractere nulo
+    /\\/           // Barras invertidas (Windows path traversal)
+  ];
+  
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(normalizedPath)) {
+      throw new Error('Caminho contém caracteres não permitidos');
+    }
+  }
+  
+  return normalizedPath;
+}
+// =================================================================
+
 // Função auxiliar para extrair o token OAuth2
 function extractAccessToken(req) {
   // Verifica o header Authorization
@@ -90,14 +136,21 @@ app.post('/upload', async (req, res) => {
       });
     }
     
-    console.log(`Tentando fazer upload do arquivo: ${filePath}`);
+    // =================================================================
+    // VALIDAÇÃO DE SEGURANÇA - CAMINHO DO ARQUIVO
+    // =================================================================
+    const safeFilePath = validateFilePath(filePath);
+    console.log(`Caminho validado: ${safeFilePath}`);
+    // =================================================================
+    
+    console.log(`Tentando fazer upload do arquivo: ${safeFilePath}`);
     
     // 5. Verificar se o arquivo existe
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(safeFilePath)) {
       return res.status(404).json({
         error: 'File Not Found',
         details: [{
-          message: `File not found: ${filePath}`,
+          message: `File not found: ${safeFilePath}`,
           domain: 'global',
           reason: 'notFound',
           location: 'filePath',
@@ -108,7 +161,7 @@ app.post('/upload', async (req, res) => {
     
     // 6. Preparar metadados do arquivo
     const fileMetadata = {
-      name: fileName || path.basename(filePath),
+      name: fileName || path.basename(safeFilePath),
       mimeType: mimeType || 'video/mp4'
     };
     
@@ -120,7 +173,7 @@ app.post('/upload', async (req, res) => {
     // 7. Criar stream do arquivo
     const media = {
       mimeType: fileMetadata.mimeType,
-      body: fs.createReadStream(filePath)
+      body: fs.createReadStream(safeFilePath)
     };
     
     console.log('Iniciando upload para o Google Drive...');
@@ -173,6 +226,18 @@ app.post('/upload', async (req, res) => {
       return res.status(error.response.status || 500).json({
         error: googleError.message || 'Google Drive API Error',
         details: googleError.errors || []
+      });
+    }
+    
+    // Captura erros de validação de segurança
+    if (error.message.includes('Caminho')) {
+      return res.status(400).json({
+        error: 'Erro de validação',
+        details: [{
+          message: error.message,
+          domain: 'security',
+          reason: 'invalidPath'
+        }]
       });
     }
     
