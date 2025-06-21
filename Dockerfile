@@ -18,4 +18,3 @@ EXPOSE 3000
 
 # Comando para iniciar a aplicação
 CMD ["node", "server.js"]
-Adicionar Dockerfile
